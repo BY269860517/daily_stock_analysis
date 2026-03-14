@@ -1,0 +1,14 @@
+{
+  "customers": [
+    {
+      "name": "User 1",
+      "email": "user1@example.com",
+      "stocks": ["AAPL", "NVDA"]
+    },
+    {
+      "name": "User 2",
+      "email": "user2@example.com",
+      "stocks": ["AAPL", "TSLA"]
+    }
+  ]
+}
