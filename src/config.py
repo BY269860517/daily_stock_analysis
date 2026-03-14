@@ -452,9 +452,16 @@ class Config:
             Path(env_file).resolve().parent
             if env_file else (Path(__file__).parent.parent).resolve()
         )
+        import logging
+        logger = logging.getLogger(__name__)
 
         customer_stock_list, customer_email_groups, customers_file = cls._load_customer_groups(
             base_dir=config_base_dir
+        )
+        customers_configured = bool(
+            os.getenv('CUSTOMERS_FILE', '').strip()
+            or os.getenv('CUSTOMERS_JSON', '').strip()
+            or (config_base_dir / 'customers.json').resolve().exists()
         )
 
         # 解析自选股列表（逗号分隔，统一为大写 Issue #355）
@@ -465,7 +472,13 @@ class Config:
 
         # 如果没有配置，使用默认的示例股票
         if not stock_list:
-            stock_list = ['600519', '000001', '300750']
+            if customers_configured:
+                logger.error(
+                    "已检测到 CUSTOMERS_FILE / CUSTOMERS_JSON 配置，但未解析到有效客户股票；"
+                    "请检查 customers.json / CUSTOMERS_JSON 的 JSON 结构。"
+                )
+            else:
+                stock_list = ['600519', '000001', '300750']
         
         # === LiteLLM multi-key parsing ===
         # GEMINI_API_KEYS (comma-separated) > GEMINI_API_KEY (single)
@@ -1151,6 +1164,12 @@ class Config:
 
             stock_list, stock_email_groups = cls._parse_customer_groups(payload, str(file_path))
             if stock_email_groups:
+                logger.info(
+                    "已加载客户清单: %s，客户组 %s 个，唯一股票 %s 只",
+                    file_path,
+                    len(stock_email_groups),
+                    len(stock_list),
+                )
                 return stock_list, stock_email_groups, str(file_path)
 
         if customers_json_raw:
@@ -1162,6 +1181,11 @@ class Config:
 
             stock_list, stock_email_groups = cls._parse_customer_groups(payload, "CUSTOMERS_JSON")
             if stock_email_groups:
+                logger.info(
+                    "已加载客户清单: CUSTOMERS_JSON，客户组 %s 个，唯一股票 %s 只",
+                    len(stock_email_groups),
+                    len(stock_list),
+                )
                 return stock_list, stock_email_groups, "CUSTOMERS_JSON"
 
         return [], [], None
@@ -1287,6 +1311,26 @@ class Config:
             env_values=env_values,
             base_dir=env_path.resolve().parent if env_path.exists() else (Path(__file__).parent.parent).resolve(),
         )
+        customers_file_raw = (
+            str(env_values.get('CUSTOMERS_FILE') or '').strip()
+            if env_values else ''
+        )
+        customers_json_raw = (
+            str(env_values.get('CUSTOMERS_JSON') or '').strip()
+            if env_values else ''
+        )
+        if not customers_file_raw:
+            customers_file_raw = os.getenv('CUSTOMERS_FILE', '').strip()
+        if not customers_json_raw:
+            customers_json_raw = os.getenv('CUSTOMERS_JSON', '').strip()
+        default_customers_file = (
+            env_path.resolve().parent if env_path.exists() else (Path(__file__).parent.parent).resolve()
+        ) / 'customers.json'
+        customers_configured = bool(
+            customers_file_raw
+            or customers_json_raw
+            or default_customers_file.resolve().exists()
+        )
 
         stock_list = customer_stock_list[:]
 
@@ -1299,7 +1343,15 @@ class Config:
                 stock_list.append(code)
 
         if not stock_list:
-            stock_list = ['000001']
+            if customers_configured:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    "已检测到 CUSTOMERS_FILE / CUSTOMERS_JSON 配置，但未解析到有效客户股票；"
+                    "本次不会回退到默认股票 000001。"
+                )
+            else:
+                stock_list = ['000001']
 
         self.stock_list = stock_list
         if customer_email_groups:

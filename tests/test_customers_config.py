@@ -94,6 +94,25 @@ class TestCustomersConfig(unittest.TestCase):
         )
 
     @patch("src.config.load_dotenv")
+    @patch.dict(
+        os.environ,
+        {
+            "CUSTOMERS_JSON": '{"customers":[{"email":"broken@example.com","stocks":]}',
+        },
+        clear=True,
+    )
+    def test_load_from_env_does_not_fallback_to_sample_stocks_when_customers_json_invalid(
+        self, _mock_dotenv
+    ):
+        from src.config import Config
+
+        config = Config._load_from_env()
+
+        self.assertEqual(config.stock_list, [])
+        self.assertEqual(config.stock_email_groups, [])
+        self.assertIsNone(config.customers_file)
+
+    @patch("src.config.load_dotenv")
     def test_refresh_stock_list_reloads_customer_file_groups(self, _mock_dotenv):
         from src.config import Config
 
@@ -122,6 +141,33 @@ class TestCustomersConfig(unittest.TestCase):
             config.stock_email_groups,
             [(["AAPL", "TSLA"], ["user@example.com"])],
         )
+
+    @patch("src.config.load_dotenv")
+    def test_refresh_stock_list_does_not_fallback_to_default_stock_when_customers_invalid(
+        self, _mock_dotenv
+    ):
+        from src.config import Config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            env_path = base / ".env"
+            env_path.write_text("CUSTOMERS_FILE=./customers.json\n", encoding="utf-8")
+            customers_path = base / "customers.json"
+            customers_path.write_text(
+                '{"customers":[{"email":"broken@example.com","stocks":]}',
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"ENV_FILE": str(env_path)}, clear=True):
+                config = Config(
+                    stock_list=["000001"],
+                    stock_email_groups=[(["000001"], ["legacy@example.com"])],
+                )
+                config.refresh_stock_list()
+
+        self.assertEqual(config.stock_list, [])
+        self.assertEqual(config.stock_email_groups, [])
+        self.assertIsNone(config.customers_file)
 
 
 if __name__ == "__main__":
