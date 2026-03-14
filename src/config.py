@@ -41,6 +41,13 @@ class ConfigIssue:
 
 _MANAGED_LITELLM_KEY_PROVIDERS = {"gemini", "vertex_ai", "anthropic", "openai", "deepseek"}
 
+DEFAULT_REPORT_DISCLAIMER_TEXT = (
+    "风险提示：本报告基于公开信息、历史数据及模型分析结果自动生成，仅供信息参考与研究交流，"
+    "不作为任何证券、证券相关产品或交易策略的最终决策依据，不构成收益承诺、保本安排或买卖指令。"
+    "证券市场存在波动与不确定性，投资者应结合自身风险承受能力、投资目标及资金情况独立判断并自行承担风险。"
+    "如需正式证券投资咨询服务，请咨询具备相应业务资质的持牌机构。"
+)
+
 
 def _get_litellm_provider(model: str) -> str:
     """Extract the LiteLLM provider prefix from a model string."""
@@ -226,6 +233,7 @@ class Config:
     report_integrity_enabled: bool = True  # Content integrity validation after LLM output
     report_integrity_retry: int = 1  # Retry count when mandatory fields missing (0 = placeholder only)
     report_history_compare_n: int = 0  # History comparison count (0 = disabled)
+    report_disclaimer_text: str = DEFAULT_REPORT_DISCLAIMER_TEXT
 
     # PushPlus 推送配置
     pushplus_token: Optional[str] = None  # PushPlus Token
@@ -729,6 +737,10 @@ class Config:
             report_integrity_enabled=os.getenv('REPORT_INTEGRITY_ENABLED', 'true').lower() == 'true',
             report_integrity_retry=int(os.getenv('REPORT_INTEGRITY_RETRY', '1')),
             report_history_compare_n=int(os.getenv('REPORT_HISTORY_COMPARE_N', '0')),
+            report_disclaimer_text=(
+                os.getenv('REPORT_DISCLAIMER_TEXT', DEFAULT_REPORT_DISCLAIMER_TEXT).strip()
+                or DEFAULT_REPORT_DISCLAIMER_TEXT
+            ),
             analysis_delay=float(os.getenv('ANALYSIS_DELAY', '0')),
             merge_email_notification=os.getenv('MERGE_EMAIL_NOTIFICATION', 'false').lower() == 'true',
             feishu_max_bytes=int(os.getenv('FEISHU_MAX_BYTES', '20000')),

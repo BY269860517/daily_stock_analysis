@@ -19,9 +19,17 @@ from src.config import get_config
 logger = logging.getLogger(__name__)
 
 
+def _get_report_disclaimer_text() -> str:
+    """Return configured disclaimer text for rendered reports."""
+    config = get_config()
+    text = getattr(config, "report_disclaimer_text", "") or ""
+    return text.strip()
+
+
 def _get_signal_level(result: AnalysisResult) -> tuple:
     """Return (signal_text, emoji, color_tag) for a result."""
-    advice = result.operation_advice
+    advice = (result.operation_advice or "").strip()
+    decision_type = (getattr(result, "decision_type", "") or "").strip().lower()
     score = result.sentiment_score
     advice_map = {
         "强烈买入": ("强烈买入", "💚", "强买"),
@@ -33,6 +41,19 @@ def _get_signal_level(result: AnalysisResult) -> tuple:
         "卖出": ("卖出", "🔴", "卖出"),
         "强烈卖出": ("卖出", "🔴", "卖出"),
     }
+    if decision_type == "buy":
+        if advice in ("强烈买入", "买入", "加仓"):
+            return advice_map[advice]
+        return ("买入", "🟢", "买入")
+    if decision_type == "sell":
+        if advice in ("减仓", "卖出", "强烈卖出"):
+            return advice_map[advice]
+        return ("卖出", "🔴", "卖出")
+    if decision_type == "hold":
+        if advice in ("持有", "观望"):
+            return advice_map[advice]
+        return ("观望", "⚪", "观望")
+
     if advice in advice_map:
         return advice_map[advice]
     if score >= 80:
@@ -149,6 +170,7 @@ def render(
     context: Dict[str, Any] = {
         "report_date": report_date,
         "report_timestamp": report_timestamp,
+        "report_disclaimer_text": _get_report_disclaimer_text(),
         "results": sorted_results,
         "enriched": sorted_enriched,  # Sorted by sentiment_score desc
         "summary_only": summary_only,

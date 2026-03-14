@@ -199,6 +199,22 @@ class NotificationService(
         self._history_compare_cache[cache_key] = history_by_code
         return {"history_by_code": history_by_code}
 
+    def _get_report_disclaimer_text(self) -> str:
+        """Return the configured report disclaimer text."""
+        text = getattr(get_config(), 'report_disclaimer_text', '') or ''
+        return text.strip()
+
+    def _append_report_disclaimer(self, lines: List[str]) -> None:
+        """Append report disclaimer to the footer when configured."""
+        disclaimer = self._get_report_disclaimer_text()
+        if not disclaimer:
+            return
+        lines.extend([
+            "",
+            "---",
+            f"> 风险提示：{disclaimer}" if not disclaimer.startswith("风险提示：") else f"> {disclaimer}",
+        ])
+
     def generate_aggregate_report(
         self,
         results: List[AnalysisResult],
@@ -678,11 +694,12 @@ class NotificationService(
                     "",
                 ])
         
-        # 底部信息（去除免责声明）
+        # 底部信息
         report_lines.extend([
             "",
             f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
+        self._append_report_disclaimer(report_lines)
         
         return "\n".join(report_lines)
     
@@ -720,7 +737,8 @@ class NotificationService(
         Returns:
             (signal_text, emoji, color_tag)
         """
-        advice = result.operation_advice
+        advice = (result.operation_advice or "").strip()
+        decision_type = (getattr(result, "decision_type", "") or "").strip().lower()
         score = result.sentiment_score
 
         # Advice-first lookup (exact match takes priority)
@@ -734,6 +752,19 @@ class NotificationService(
             '卖出': ('卖出', '🔴', '卖出'),
             '强烈卖出': ('卖出', '🔴', '卖出'),
         }
+        if decision_type == "buy":
+            if advice in ("强烈买入", "买入", "加仓"):
+                return advice_map[advice]
+            return ("买入", "🟢", "买入")
+        if decision_type == "sell":
+            if advice in ("减仓", "卖出", "强烈卖出"):
+                return advice_map[advice]
+            return ("卖出", "🔴", "卖出")
+        if decision_type == "hold":
+            if advice in ("持有", "观望"):
+                return advice_map[advice]
+            return ("观望", "⚪", "观望")
+
         if advice in advice_map:
             return advice_map[advice]
 
@@ -808,10 +839,10 @@ class NotificationService(
                 "",
             ])
             for r in sorted_results:
-                _, signal_emoji, _ = self._get_signal_level(r)
+                signal_text, signal_emoji, _ = self._get_signal_level(r)
                 display_name = self._escape_md(r.name)
                 report_lines.append(
-                    f"{signal_emoji} **{display_name}({r.code})**: {r.operation_advice} | "
+                    f"{signal_emoji} **{display_name}({r.code})**: {signal_text} | "
                     f"评分 {r.sentiment_score} | {r.trend_prediction}"
                 )
             report_lines.extend([
@@ -1026,11 +1057,12 @@ class NotificationService(
                     "",
                 ])
         
-        # 底部（去除免责声明）
+        # 底部
         report_lines.extend([
             "",
             f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
+        self._append_report_disclaimer(report_lines)
         
         return "\n".join(report_lines)
     
@@ -1080,10 +1112,10 @@ class NotificationService(
             lines.append("**📊 分析结果摘要**")
             lines.append("")
             for r in sorted_results:
-                _, signal_emoji, _ = self._get_signal_level(r)
+                signal_text, signal_emoji, _ = self._get_signal_level(r)
                 stock_name = self._escape_md(r.name if r.name and not r.name.startswith('股票') else f'股票{r.code}')
                 lines.append(
-                    f"{signal_emoji} **{stock_name}({r.code})**: {r.operation_advice} | "
+                    f"{signal_emoji} **{stock_name}({r.code})**: {signal_text} | "
                     f"评分 {r.sentiment_score} | {r.trend_prediction}"
                 )
         else:
@@ -1187,6 +1219,7 @@ class NotificationService(
         models = self._collect_models_used(results)
         if models:
             lines.append(f"*分析模型: {', '.join(models)}*")
+        self._append_report_disclaimer(lines)
 
         content = "\n".join(lines)
         
@@ -1251,9 +1284,9 @@ class NotificationService(
             lines.append(f"*分析模型: {', '.join(models)}*")
         lines.extend([
             "---",
-            "*AI生成，仅供参考，不构成投资建议*",
             f"*详细报告见 reports/report_{report_date.replace('-', '')}.md*"
         ])
+        self._append_report_disclaimer(lines)
 
         content = "\n".join(lines)
 
@@ -1301,14 +1334,15 @@ class NotificationService(
             "",
         ]
         for r in sorted_results:
-            _, emoji, _ = self._get_signal_level(r)
+            signal_text, emoji, _ = self._get_signal_level(r)
             name = r.name if r.name and not r.name.startswith('股票') else f'股票{r.code}'
             dash = r.dashboard or {}
             core = dash.get('core_conclusion', {}) or {}
             one = (core.get('one_sentence') or r.analysis_summary or '')[:60]
-            lines.append(f"**{self._escape_md(name)}({r.code})** {emoji} {r.operation_advice} | 评分{r.sentiment_score} | {one}")
+            lines.append(f"**{self._escape_md(name)}({r.code})** {emoji} {signal_text} | 评分{r.sentiment_score} | {one}")
         lines.append("")
         lines.append(f"*{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+        self._append_report_disclaimer(lines)
         return "\n".join(lines)
 
     def generate_single_stock_report(self, result: AnalysisResult) -> str:

@@ -221,6 +221,27 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertIn("600519", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_prefers_decision_type_when_advice_conflicts(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="300059",
+            name="东方财富",
+            sentiment_score=38,
+            trend_prediction="看空",
+            operation_advice="观望",
+            decision_type="sell",
+            analysis_summary="偏弱",
+        )
+
+        out = service.generate_dashboard_report([result])
+
+        self.assertIn(": 卖出 |", out)
+        self.assertIn("🔴", out)
+
+    @mock.patch("src.notification.get_config")
     def test_history_compare_context_uses_cache(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_history_compare_n=3)
         service = NotificationService()

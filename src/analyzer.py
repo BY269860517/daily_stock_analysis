@@ -385,7 +385,14 @@ class AnalysisResult:
             '卖出': '🔴',
             '强烈卖出': '❌',
         }
-        advice = self.operation_advice or ''
+        advice = (self.operation_advice or '').strip()
+        decision_type = (self.decision_type or '').strip().lower()
+        if decision_type == 'buy':
+            return '🟢'
+        if decision_type == 'sell':
+            return '🔴'
+        if decision_type == 'hold' and advice not in ('持有', '观望'):
+            return '⚪'
         # Direct match first
         if advice in emoji_map:
             return emoji_map[advice]

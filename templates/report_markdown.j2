@@ -6,7 +6,7 @@
 ## 📊 分析结果摘要
 
 {% for e in enriched %}
-{{ e.signal_emoji }} **{{ e.stock_name }}({{ e.result.code }})**: {{ e.result.operation_advice }} | 评分 {{ e.result.sentiment_score }} | {{ e.result.trend_prediction }}
+{{ e.signal_emoji }} **{{ e.stock_name }}({{ e.result.code }})**: {{ e.signal_text }} | 评分 {{ e.result.sentiment_score }} | {{ e.result.trend_prediction }}
 {% endfor %}
 
 ---
@@ -157,3 +157,8 @@
 {% endif %}
 
 *报告生成时间：{{ report_timestamp }}*
+{% if report_disclaimer_text %}
+
+---
+> {{ report_disclaimer_text }}
+{% endif %}

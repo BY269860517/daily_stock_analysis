@@ -67,6 +67,18 @@ class TestReportRenderer(unittest.TestCase):
         self.assertIn("核心结论", out)
         self.assertIn("作战计划", out)
 
+    def test_render_markdown_prefers_decision_type_when_advice_conflicts(self) -> None:
+        """Conflicting advice should render with decision_type-consistent signal."""
+        r = _make_result(
+            sentiment_score=38,
+            operation_advice="观望",
+            decision_type="sell",
+        )
+        out = render("markdown", [r], summary_only=True)
+        self.assertIsNotNone(out)
+        self.assertIn(": 卖出 |", out)
+        self.assertIn("🔴", out)
+
     def test_render_wechat(self) -> None:
         """Wechat platform renders."""
         r = _make_result()
