@@ -14,7 +14,6 @@ A股自选股智能分析系统 - 核心分析流水线
 import logging
 import time
 import uuid
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
@@ -1252,20 +1251,16 @@ class StockAnalysisPipeline:
                         non_wechat_success = result or non_wechat_success
                     elif channel == NotificationChannel.EMAIL:
                         if stock_email_groups:
-                            code_to_emails: Dict[str, Optional[List[str]]] = {}
-                            for r in results:
-                                if r.code not in code_to_emails:
-                                    emails = []
-                                    for stocks, emails_list in stock_email_groups:
-                                        if r.code in stocks:
-                                            emails.extend(emails_list)
-                                    code_to_emails[r.code] = list(dict.fromkeys(emails)) if emails else None
-                            emails_to_results: Dict[Optional[Tuple], List] = defaultdict(list)
-                            for r in results:
-                                recs = code_to_emails.get(r.code)
-                                key = tuple(recs) if recs else None
-                                emails_to_results[key].append(r)
-                            for key, group_results in emails_to_results.items():
+                            delivery_buckets = self.notifier.build_email_delivery_buckets(
+                                [r.code for r in results]
+                            )
+                            for receivers, bucket_codes in delivery_buckets:
+                                bucket_code_set = set(bucket_codes)
+                                group_results = [
+                                    r for r in results if r.code in bucket_code_set
+                                ]
+                                if not group_results:
+                                    continue
                                 grp_report = self._generate_aggregate_report(group_results, report_type)
                                 grp_image_bytes = None
                                 if channel.value in self.notifier._markdown_to_image_channels:
@@ -1276,7 +1271,6 @@ class StockAnalysisPipeline:
                                 use_image = self.notifier._should_use_image_for_channel(
                                     channel, grp_image_bytes
                                 )
-                                receivers = list(key) if key is not None else None
                                 if use_image:
                                     result = self.notifier._send_email_with_inline_image(
                                         grp_image_bytes, receivers=receivers

@@ -232,6 +232,47 @@ class TestEmailSender(unittest.TestCase):
         self.assertIn("g2@qq.com", receivers)
         self.assertIn("default@qq.com", receivers)
 
+    def test_build_email_delivery_buckets_aggregates_overlapping_groups_per_email(self):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["default@qq.com"],
+            stock_email_groups=[
+                (["AAPL", "NVDA"], ["user1@example.com"]),
+                (["AAPL", "TSLA"], ["user2@example.com"]),
+            ],
+        )
+        sender = EmailSender(cfg)
+
+        buckets = sender.build_email_delivery_buckets(["AAPL", "NVDA", "TSLA"])
+
+        self.assertEqual(
+            buckets,
+            [
+                (["user1@example.com"], ["AAPL", "NVDA"]),
+                (["user2@example.com"], ["AAPL", "TSLA"]),
+            ],
+        )
+
+    def test_build_email_delivery_buckets_routes_unmatched_codes_to_default_bucket(self):
+        cfg = _config(
+            email_sender="a@qq.com",
+            email_password="p",
+            email_receivers=["default@qq.com"],
+            stock_email_groups=[(["000001"], ["group@qq.com"])],
+        )
+        sender = EmailSender(cfg)
+
+        buckets = sender.build_email_delivery_buckets(["000001", "600519"])
+
+        self.assertEqual(
+            buckets,
+            [
+                (["group@qq.com"], ["000001"]),
+                (None, ["600519"]),
+            ],
+        )
+
 
 class TestAstrbotSender(unittest.TestCase):
     """Unit tests for AstrbotSender."""

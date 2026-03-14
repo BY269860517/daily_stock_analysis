@@ -20,9 +20,10 @@ from src.enums import ReportType
 
 
 class _FakeNotifier:
-    def __init__(self):
+    def __init__(self, stock_email_groups=None):
         self._markdown_to_image_channels = {"email"}
         self._markdown_to_image_max_chars = 15000
+        self._stock_email_groups = stock_email_groups or []
         self.generate_dashboard_report = MagicMock(side_effect=self._generate_dashboard_report)
         self.save_report_to_file = MagicMock(return_value="/tmp/report.md")
         self.is_available = MagicMock(return_value=True)
@@ -40,15 +41,43 @@ class _FakeNotifier:
     def _generate_dashboard_report(results):
         return "report:" + ",".join(r.code for r in results)
 
+    def build_email_delivery_buckets(self, stock_codes):
+        unique_stock_codes = list(dict.fromkeys(stock_codes or []))
+        if not unique_stock_codes:
+            return []
+        if not self._stock_email_groups:
+            return [(None, unique_stock_codes)]
+
+        email_to_codes = {}
+        unmatched_codes = []
+        for code in unique_stock_codes:
+            matched = False
+            for stocks, emails in self._stock_email_groups:
+                if code not in stocks:
+                    continue
+                matched = True
+                for email in emails:
+                    email_to_codes.setdefault(email, [])
+                    if code not in email_to_codes[email]:
+                        email_to_codes[email].append(code)
+            if not matched:
+                unmatched_codes.append(code)
+
+        buckets = [([email], codes) for email, codes in email_to_codes.items() if codes]
+        if unmatched_codes:
+            buckets.append((None, unmatched_codes))
+        return buckets or [(None, unique_stock_codes)]
+
 
 class TestPipelineEmailGroupImageRouting(unittest.TestCase):
-    def _build_pipeline(self):
+    def _build_pipeline(self, stock_email_groups=None):
+        groups = stock_email_groups or [
+            (["000001"], ["group@example.com"]),
+        ]
         pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
-        pipeline.notifier = _FakeNotifier()
+        pipeline.notifier = _FakeNotifier(groups)
         pipeline.config = SimpleNamespace(
-            stock_email_groups=[
-                (["000001"], ["group@example.com"]),
-            ]
+            stock_email_groups=groups
         )
         return pipeline
 
@@ -83,6 +112,31 @@ class TestPipelineEmailGroupImageRouting(unittest.TestCase):
         called_receivers = [kwargs.get("receivers") for _, kwargs in pipeline.notifier.send_to_email.call_args_list]
         self.assertIn(["group@example.com"], called_receivers)
         self.assertIn(None, called_receivers)
+
+    @patch("src.md2img.markdown_to_image", return_value=None)
+    def test_send_notifications_email_group_aggregates_by_email_with_overlapping_stocks(self, _mock_md2img):
+        pipeline = self._build_pipeline(
+            stock_email_groups=[
+                (["AAPL", "NVDA"], ["user1@example.com"]),
+                (["AAPL", "TSLA"], ["user2@example.com"]),
+            ]
+        )
+        results = [
+            SimpleNamespace(code="AAPL"),
+            SimpleNamespace(code="NVDA"),
+            SimpleNamespace(code="TSLA"),
+        ]
+
+        pipeline._send_notifications(results, ReportType.SIMPLE)
+
+        pipeline.notifier._send_email_with_inline_image.assert_not_called()
+        self.assertEqual(pipeline.notifier.send_to_email.call_count, 2)
+        call_details = [
+            (args[0], kwargs.get("receivers"))
+            for args, kwargs in pipeline.notifier.send_to_email.call_args_list
+        ]
+        self.assertIn(("report:AAPL,NVDA", ["user1@example.com"]), call_details)
+        self.assertIn(("report:AAPL,TSLA", ["user2@example.com"]), call_details)
 
 
 class _FakeWechatNotifier:

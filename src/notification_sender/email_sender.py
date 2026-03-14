@@ -6,7 +6,7 @@ Email 发送提醒服务
 1. 通过 SMTP 发送 Email 消息
 """
 import logging
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -104,6 +104,57 @@ class EmailSender:
                 seen.add(e)
                 result.append(e)
         return result
+
+    def build_email_delivery_buckets(
+        self, stock_codes: List[str]
+    ) -> List[Tuple[Optional[List[str]], List[str]]]:
+        """
+        Build per-email stock buckets for aggregate delivery.
+
+        Each email address receives at most one stock bucket containing the union
+        of all matching stock codes across every configured stock_email_group.
+        Any stock code that does not match a configured group is routed once via
+        the default receivers bucket (represented by ``receivers=None``).
+        """
+        unique_stock_codes: List[str] = []
+        seen_codes: set = set()
+        for code in stock_codes or []:
+            if code and code not in seen_codes:
+                seen_codes.add(code)
+                unique_stock_codes.append(code)
+
+        if not unique_stock_codes:
+            return []
+
+        if not self._stock_email_groups:
+            return [(None, unique_stock_codes)]
+
+        email_to_codes: dict[str, List[str]] = {}
+        unmatched_codes: List[str] = []
+
+        for code in unique_stock_codes:
+            matched = False
+            for stocks, emails in self._stock_email_groups:
+                if code not in stocks:
+                    continue
+                matched = True
+                for email in emails:
+                    bucket = email_to_codes.setdefault(email, [])
+                    if code not in bucket:
+                        bucket.append(code)
+            if not matched:
+                unmatched_codes.append(code)
+
+        buckets: List[Tuple[Optional[List[str]], List[str]]] = [
+            ([email], codes)
+            for email, codes in email_to_codes.items()
+            if codes
+        ]
+
+        if unmatched_codes:
+            buckets.append((None, unmatched_codes))
+
+        return buckets or [(None, unique_stock_codes)]
     
     def send_to_email(
         self, content: str, subject: Optional[str] = None, receivers: Optional[List[str]] = None
