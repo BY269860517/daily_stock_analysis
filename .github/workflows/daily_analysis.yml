@@ -121,6 +121,8 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVERS: ${{ vars.EMAIL_RECEIVERS || secrets.EMAIL_RECEIVERS }}
           EMAIL_SENDER_NAME: ${{ vars.EMAIL_SENDER_NAME || secrets.EMAIL_SENDER_NAME || 'daily_stock_analysis股票分析助手' }}
+          CUSTOMERS_FILE: ${{ vars.CUSTOMERS_FILE || 'customers.json' }}
+          CUSTOMERS_JSON: ${{ secrets.CUSTOMERS_JSON }}
           
           # 方式五：Pushover
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
@@ -153,7 +155,7 @@ jobs:
           # ==========================================
           # 自选股配置
           # ==========================================
-          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
+          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '' }}
           MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'cn' }}
           
           # ==========================================
@@ -188,6 +190,13 @@ jobs:
             echo "✅ LITELLM 配置文件已写入: $LITELLM_CONFIG"
           fi
 
+          if [ -n "$CUSTOMERS_JSON" ]; then
+            echo "📝 使用 GitHub Actions Secret 中的 CUSTOMERS_JSON 客户清单"
+            mkdir -p "$(dirname "$CUSTOMERS_FILE")"
+            printf '%s' "$CUSTOMERS_JSON" > "$CUSTOMERS_FILE"
+            echo "✅ 客户清单已写入: $CUSTOMERS_FILE"
+          fi
+
           # 判断运行模式
           MODE="${{ github.event.inputs.mode || 'full' }}"
           
@@ -197,6 +206,7 @@ jobs:
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "🎯 运行模式: $MODE"
           echo "📊 自选股: $STOCK_LIST"
+          echo "👥 客户清单: $([ -n "$CUSTOMERS_JSON" ] && echo "$CUSTOMERS_FILE (from secret)" || ([ -f "$CUSTOMERS_FILE" ] && echo "$CUSTOMERS_FILE" || echo '未配置'))"
           echo "📝 报告类型: $REPORT_TYPE"
           echo ""
           echo "=========================================="

@@ -89,6 +89,7 @@ class Config:
     
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    customers_file: Optional[str] = None
 
     # === 飞书云文档配置 ===
     feishu_app_id: Optional[str] = None
@@ -446,14 +447,22 @@ class Config:
                 os.environ['https_proxy'] = https_proxy
 
         
+        env_file = os.getenv("ENV_FILE")
+        config_base_dir = (
+            Path(env_file).resolve().parent
+            if env_file else (Path(__file__).parent.parent).resolve()
+        )
+
+        customer_stock_list, customer_email_groups, customers_file = cls._load_customer_groups(
+            base_dir=config_base_dir
+        )
+
         # 解析自选股列表（逗号分隔，统一为大写 Issue #355）
-        stock_list_str = os.getenv('STOCK_LIST', '')
-        stock_list = [
-            (c or "").strip().upper()
-            for c in stock_list_str.split(',')
-            if (c or "").strip()
-        ]
-        
+        stock_list = customer_stock_list[:]
+        for code in cls._parse_stock_codes(os.getenv('STOCK_LIST', '')):
+            if code not in stock_list:
+                stock_list.append(code)
+
         # 如果没有配置，使用默认的示例股票
         if not stock_list:
             stock_list = ['600519', '000001', '300750']
@@ -618,6 +627,7 @@ class Config:
         
         return cls(
             stock_list=stock_list,
+            customers_file=customers_file,
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
@@ -684,7 +694,7 @@ class Config:
             email_sender_name=os.getenv('EMAIL_SENDER_NAME', 'daily_stock_analysis股票分析助手'),
             email_password=os.getenv('EMAIL_PASSWORD'),
             email_receivers=[r.strip() for r in os.getenv('EMAIL_RECEIVERS', '').split(',') if r.strip()],
-            stock_email_groups=cls._parse_stock_email_groups(),
+            stock_email_groups=customer_email_groups or cls._parse_stock_email_groups(),
             pushover_user_key=os.getenv('PUSHOVER_USER_KEY'),
             pushover_api_token=os.getenv('PUSHOVER_API_TOKEN'),
             pushplus_token=os.getenv('PUSHPLUS_TOKEN'),
@@ -996,6 +1006,167 @@ class Config:
         return model_list
 
     @classmethod
+    def _dedupe_preserve_order(cls, values: List[str]) -> List[str]:
+        """Return unique non-empty values while preserving order."""
+        seen: set = set()
+        result: List[str] = []
+        for value in values:
+            if value and value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
+    @classmethod
+    def _parse_stock_codes(cls, raw_value: Any) -> List[str]:
+        """Parse stock codes from comma-separated string or list-like value."""
+        if raw_value is None:
+            return []
+        if isinstance(raw_value, list):
+            candidates = raw_value
+        else:
+            candidates = str(raw_value).split(',')
+        return cls._dedupe_preserve_order([
+            (str(code) if code is not None else "").strip().upper()
+            for code in candidates
+            if (str(code) if code is not None else "").strip()
+        ])
+
+    @classmethod
+    def _parse_email_list(cls, raw_value: Any) -> List[str]:
+        """Parse emails from comma-separated string or list-like value."""
+        if raw_value is None:
+            return []
+        if isinstance(raw_value, list):
+            candidates = raw_value
+        else:
+            candidates = str(raw_value).split(',')
+        return cls._dedupe_preserve_order([
+            (str(email) if email is not None else "").strip()
+            for email in candidates
+            if (str(email) if email is not None else "").strip()
+        ])
+
+    @classmethod
+    def _extract_customer_records(cls, payload: Any, source: str) -> List[Dict[str, Any]]:
+        """Normalize customers payload root into a list of customer dicts."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, dict):
+            customers = payload.get("customers")
+            if isinstance(customers, list):
+                return [item for item in customers if isinstance(item, dict)]
+
+        logger.warning("客户配置格式无效，已忽略: %s", source)
+        return []
+
+    @classmethod
+    def _parse_customer_groups(
+        cls, payload: Any, source: str
+    ) -> Tuple[List[str], List[Tuple[List[str], List[str]]]]:
+        """Parse customers payload into stock list and stock_email_groups."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        stock_list: List[str] = []
+        stock_email_groups: List[Tuple[List[str], List[str]]] = []
+
+        for idx, item in enumerate(cls._extract_customer_records(payload, source), start=1):
+            if item.get("enabled", True) is False:
+                continue
+
+            emails = cls._parse_email_list(item.get("emails"))
+            if not emails and item.get("email") is not None:
+                emails = cls._parse_email_list(item.get("email"))
+
+            stocks = cls._parse_stock_codes(item.get("stocks"))
+
+            if not emails or not stocks:
+                logger.warning(
+                    "客户配置第 %s 项缺少 email/emails 或 stocks，已跳过: %s",
+                    idx,
+                    source,
+                )
+                continue
+
+            stock_email_groups.append((stocks, emails))
+            for code in stocks:
+                if code not in stock_list:
+                    stock_list.append(code)
+
+        return stock_list, stock_email_groups
+
+    @classmethod
+    def _load_customer_groups(
+        cls,
+        env_values: Optional[Dict[str, Any]] = None,
+        base_dir: Optional[Path] = None,
+    ) -> Tuple[List[str], List[Tuple[List[str], List[str]]], Optional[str]]:
+        """
+        Load customer groups from CUSTOMERS_FILE / customers.json / CUSTOMERS_JSON.
+
+        Priority:
+        1. CUSTOMERS_FILE (when configured and readable)
+        2. customers.json in the config base directory
+        3. CUSTOMERS_JSON inline JSON string
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        base_dir = (base_dir or (Path(__file__).parent.parent)).resolve()
+
+        def _env_get(key: str) -> str:
+            if env_values and env_values.get(key) not in (None, ''):
+                return str(env_values.get(key))
+            return os.getenv(key, '')
+
+        customers_file_raw = _env_get('CUSTOMERS_FILE').strip()
+        customers_json_raw = _env_get('CUSTOMERS_JSON').strip()
+
+        file_candidates: List[Path] = []
+        if customers_file_raw:
+            configured_path = Path(customers_file_raw)
+            if not configured_path.is_absolute():
+                configured_path = (base_dir / configured_path).resolve()
+            file_candidates.append(configured_path)
+        else:
+            default_file = (base_dir / 'customers.json').resolve()
+            if default_file.exists():
+                file_candidates.append(default_file)
+
+        for file_path in file_candidates:
+            if not file_path.exists():
+                logger.warning("客户配置文件不存在，已忽略: %s", file_path)
+                continue
+            try:
+                payload = json.loads(file_path.read_text(encoding='utf-8-sig'))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("读取客户配置文件失败，已忽略: %s (%s)", file_path, exc)
+                continue
+
+            stock_list, stock_email_groups = cls._parse_customer_groups(payload, str(file_path))
+            if stock_email_groups:
+                return stock_list, stock_email_groups, str(file_path)
+
+        if customers_json_raw:
+            try:
+                payload = json.loads(customers_json_raw)
+            except json.JSONDecodeError as exc:
+                logger.warning("CUSTOMERS_JSON 不是合法 JSON，已忽略: %s", exc)
+                return [], [], None
+
+            stock_list, stock_email_groups = cls._parse_customer_groups(payload, "CUSTOMERS_JSON")
+            if stock_email_groups:
+                return stock_list, stock_email_groups, "CUSTOMERS_JSON"
+
+        return [], [], None
+
+    @classmethod
     def _parse_stock_email_groups(cls) -> List[Tuple[List[str], List[str]]]:
         """
         Parse STOCK_GROUP_N and EMAIL_GROUP_N from environment.
@@ -1009,12 +1180,12 @@ class Config:
             if m:
                 idx = int(m.group(1))
                 val = os.environ[key].strip()
-                groups.setdefault(idx, {})['stocks'] = [c.strip() for c in val.split(',') if c.strip()]
+                groups.setdefault(idx, {})['stocks'] = cls._parse_stock_codes(val)
             m = email_re.match(key)
             if m:
                 idx = int(m.group(1))
                 val = os.environ[key].strip()
-                groups.setdefault(idx, {})['emails'] = [e.strip() for e in val.split(',') if e.strip()]
+                groups.setdefault(idx, {})['emails'] = cls._parse_email_list(val)
         result = []
         for idx in sorted(groups.keys()):
             g = groups[idx]
@@ -1107,26 +1278,36 @@ class Config:
         # 也能获取到最新的股票列表配置
         env_file = os.getenv("ENV_FILE")
         env_path = Path(env_file) if env_file else (Path(__file__).parent.parent / '.env')
-        stock_list_str = ''
+        env_values: Dict[str, Any] = {}
         if env_path.exists():
             # 直接从 .env 文件读取最新的配置
             env_values = dotenv_values(env_path)
-            stock_list_str = (env_values.get('STOCK_LIST') or '').strip()
 
-        # 如果 .env 文件不存在或未配置，才尝试从系统环境变量读取
+        customer_stock_list, customer_email_groups, customers_file = self._load_customer_groups(
+            env_values=env_values,
+            base_dir=env_path.resolve().parent if env_path.exists() else (Path(__file__).parent.parent).resolve(),
+        )
+
+        stock_list = customer_stock_list[:]
+
+        stock_list_str = (env_values.get('STOCK_LIST') or '').strip() if env_values else ''
         if not stock_list_str:
             stock_list_str = os.getenv('STOCK_LIST', '')
 
-        stock_list = [
-            (c or "").strip().upper()
-            for c in stock_list_str.split(',')
-            if (c or "").strip()
-        ]
+        for code in self._parse_stock_codes(stock_list_str):
+            if code not in stock_list:
+                stock_list.append(code)
 
         if not stock_list:
             stock_list = ['000001']
 
         self.stock_list = stock_list
+        if customer_email_groups:
+            self.stock_email_groups = customer_email_groups
+            self.customers_file = customers_file
+        else:
+            self.stock_email_groups = self._parse_stock_email_groups()
+            self.customers_file = None
     
     def validate_structured(self) -> List[ConfigIssue]:
         """Return structured validation issues with severity levels.
