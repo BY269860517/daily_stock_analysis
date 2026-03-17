@@ -24,7 +24,12 @@ from src.config import get_config, Config
 from src.storage import get_db
 from data_provider import DataFetcherManager
 from data_provider.realtime_types import ChipDistribution
-from src.analyzer import GeminiAnalyzer, AnalysisResult, fill_chip_structure_if_needed
+from src.analyzer import (
+    GeminiAnalyzer,
+    AnalysisResult,
+    fill_chip_structure_if_needed,
+    format_user_friendly_analysis_error,
+)
 from src.data.stock_mapping import STOCK_NAME_MAP
 from src.notification import NotificationService, NotificationChannel
 from src.search_service import SearchService
@@ -661,7 +666,7 @@ class StockAnalysisPipeline:
             trend_prediction="未知",
             operation_advice="观望",
             success=agent_result.success,
-            error_message=agent_result.error if not agent_result.success else None,
+            error_message=None,
             data_sources=f"agent:{agent_result.provider}",
             model_used=agent_result.model or None,
         )
@@ -684,6 +689,14 @@ class StockAnalysisPipeline:
         else:
             result.sentiment_score = 50
             result.operation_advice = "观望"
+            if agent_result.error:
+                safe_summary, safe_error = format_user_friendly_analysis_error(
+                    Exception(agent_result.error)
+                )
+                result.analysis_summary = safe_summary
+                result.error_message = safe_error
+            if not result.analysis_summary:
+                result.analysis_summary = "本次AI分析暂时不可用，已返回保守占位结果，建议稍后重试。"
             if not result.error_message:
                 result.error_message = "Agent 未能生成有效的决策仪表盘"
 

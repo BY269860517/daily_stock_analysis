@@ -58,6 +58,50 @@ def check_content_integrity(result: "AnalysisResult") -> Tuple[bool, List[str]]:
     return len(missing) == 0, missing
 
 
+def format_user_friendly_analysis_error(exc: Exception) -> Tuple[str, str]:
+    """
+    Convert raw model/provider exceptions into user-facing summary and error text.
+
+    Raw exception details stay in logs. Reports should only show a concise, safe
+    fallback message.
+    """
+    message = str(exc or "").strip()
+    lowered = message.lower()
+
+    rate_limit_markers = (
+        "ratelimit",
+        "rate limit",
+        "too many requests",
+        "429",
+        "quota",
+        "resource exhausted",
+    )
+    auth_markers = (
+        "api key",
+        "authentication",
+        "unauthorized",
+        "permission",
+        "forbidden",
+        "401",
+        "403",
+    )
+
+    if any(marker in lowered for marker in rate_limit_markers):
+        return (
+            "AI服务当前较繁忙，本次未能完成分析，建议稍后重试。",
+            "AI 服务繁忙或请求频率过高，请稍后重试。",
+        )
+    if any(marker in lowered for marker in auth_markers):
+        return (
+            "AI分析服务当前不可用，本次返回保守占位结果，请稍后重试。",
+            "AI 服务认证或权限配置异常，请稍后重试。",
+        )
+    return (
+        "本次AI分析暂时不可用，已返回保守占位结果，建议稍后重试或手动复盘。",
+        "AI 分析暂时不可用，请稍后重试。",
+    )
+
+
 def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) -> None:
     """Fill missing mandatory fields with placeholders (in-place). Module-level for pipeline."""
     for field in missing_fields:
@@ -965,17 +1009,18 @@ class GeminiAnalyzer:
             
         except Exception as e:
             logger.error(f"AI 分析 {name}({code}) 失败: {e}")
+            safe_summary, safe_error = format_user_friendly_analysis_error(e)
             return AnalysisResult(
                 code=code,
                 name=name,
                 sentiment_score=50,
                 trend_prediction='震荡',
-                operation_advice='持有',
+                operation_advice='观望',
                 confidence_level='低',
-                analysis_summary=f'分析过程出错: {str(e)[:100]}',
+                analysis_summary=safe_summary,
                 risk_warning='分析失败，请稍后重试或手动分析',
                 success=False,
-                error_message=str(e),
+                error_message=safe_error,
                 model_used=None,
             )
     

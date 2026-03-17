@@ -13,6 +13,7 @@ import json
 import unittest
 import sys
 import os
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 from dataclasses import dataclass, field
@@ -93,12 +94,14 @@ class TestAgentResultConversion(unittest.TestCase):
     def _make_pipeline(self):
         """Create a minimal StockAnalysisPipeline with mocked dependencies."""
         # We need to import and mock carefully to avoid touching real services
-        with patch('src.core.pipeline.get_config') as mock_config, \
-             patch('src.core.pipeline.get_db'), \
-             patch('src.core.pipeline.DataFetcherManager'), \
-             patch('src.core.pipeline.GeminiAnalyzer'), \
-             patch('src.core.pipeline.NotificationService'), \
-             patch('src.core.pipeline.SearchService'):
+        pipeline_module = importlib.import_module('src.core.pipeline')
+
+        with patch.object(pipeline_module, 'get_config') as mock_config, \
+             patch.object(pipeline_module, 'get_db'), \
+             patch.object(pipeline_module, 'DataFetcherManager'), \
+             patch.object(pipeline_module, 'GeminiAnalyzer'), \
+             patch.object(pipeline_module, 'NotificationService'), \
+             patch.object(pipeline_module, 'SearchService'):
 
             mock_cfg = MagicMock()
             mock_cfg.max_workers = 2
@@ -117,8 +120,7 @@ class TestAgentResultConversion(unittest.TestCase):
             mock_cfg.save_context_snapshot = False
             mock_config.return_value = mock_cfg
 
-            from src.core.pipeline import StockAnalysisPipeline
-            pipeline = StockAnalysisPipeline(config=mock_cfg)
+            pipeline = pipeline_module.StockAnalysisPipeline(config=mock_cfg)
             return pipeline
 
     def test_convert_success_dashboard(self):
@@ -201,7 +203,33 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.sentiment_score, 50)
         self.assertEqual(result.operation_advice, "观望")
-        self.assertIn("Max steps exceeded", result.error_message)
+        self.assertIn("AI 分析", result.error_message)
+        self.assertIn("暂时不可用", result.analysis_summary)
+
+    def test_convert_failed_dashboard_rate_limit_error_is_sanitized(self):
+        """Rate limit errors should not leak raw provider messages into reports."""
+        pipeline = self._make_pipeline()
+
+        from src.agent.executor import AgentResult
+        from src.enums import ReportType
+
+        agent_result = AgentResult(
+            success=False,
+            content="",
+            dashboard=None,
+            error="litellm.RateLimitError: All LLM models failed (tried 2 model(s)). Last error: 429 Too Many Requests",
+        )
+
+        result = pipeline._agent_result_to_analysis_result(
+            agent_result, "300444", "双杰电气", ReportType.SIMPLE, "q-rate-limit"
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.operation_advice, "观望")
+        self.assertIn("AI服务当前较繁忙", result.analysis_summary)
+        self.assertIn("请求频率过高", result.error_message)
+        self.assertNotIn("RateLimitError", result.analysis_summary)
+        self.assertNotIn("429", result.error_message)
 
     def test_convert_uses_dashboard_stock_name_when_input_is_placeholder(self):
         """When input name is placeholder-like, prefer dashboard stock_name."""
